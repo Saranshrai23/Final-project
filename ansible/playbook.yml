@@ -1,0 +1,7 @@
+---
+- name: Provision Jenkins Server with DevOps Tools
+  hosts: local
+  become: yes
+  roles:
+    - jenkins_tools
+

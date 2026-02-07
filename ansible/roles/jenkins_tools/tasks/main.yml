@@ -1,0 +1,166 @@
+---
+################################################
+# PRE-CLEAN (Fix Docker Signed-By conflict BEFORE apt update)
+################################################
+
+- name: Remove old Docker repo file (docker.list) if present
+  file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
+
+- name: Remove modern Docker repo file (docker.sources) if present (will re-add clean)
+  file:
+    path: /etc/apt/sources.list.d/docker.sources
+    state: absent
+
+- name: Remove old Docker key (docker.gpg) if present
+  file:
+    path: /etc/apt/keyrings/docker.gpg
+    state: absent
+
+# (optional but safe) remove any other docker related list files if they exist
+- name: Remove any other docker apt list fragments if present
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/docker-ce.list
+    - /etc/apt/sources.list.d/docker-ce.sources
+    - /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
+
+################################################
+# Update apt cache (now it won't fail)
+################################################
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+################################################
+# Install Required Base Packages
+################################################
+
+- name: Install common dependencies
+  apt:
+    name:
+      - curl
+      - unzip
+      - gnupg
+      - software-properties-common
+      - ca-certificates
+    state: present
+
+################################################
+# DOCKER INSTALL (Official Repo) - deb822 + docker.asc
+################################################
+
+- name: Ensure /etc/apt/keyrings exists
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download Docker GPG key (docker.asc)
+  get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker repo (deb822 docker.sources)
+  copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: {{ ansible_distribution_release }}
+      Components: stable
+      Architectures: {{ 'amd64' if ansible_architecture in ['x86_64','amd64'] else 'arm64' if ansible_architecture in ['aarch64','arm64'] else ansible_architecture }}
+      Signed-By: /etc/apt/keyrings/docker.asc
+
+- name: Update apt after adding Docker repo
+  apt:
+    update_cache: yes
+
+- name: Install Docker Engine + plugins
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+
+- name: Enable and start Docker
+  service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Add Jenkins user to Docker group
+  user:
+    name: "{{ item }}"
+    groups: docker
+    append: yes
+  loop: "{{ docker_users }}"
+  notify: restart docker
+
+################################################
+# AWS CLI v2
+################################################
+
+- name: Download AWS CLI v2
+  get_url:
+    url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+    dest: /tmp/awscliv2.zip
+
+- name: Unzip AWS CLI
+  unarchive:
+    src: /tmp/awscliv2.zip
+    dest: /tmp
+    remote_src: yes
+
+- name: Install AWS CLI
+  command: /tmp/aws/install --update
+  args:
+    creates: /usr/local/bin/aws
+
+################################################
+# TERRAFORM (Official Hashicorp Repo)
+################################################
+
+- name: Add HashiCorp GPG key
+  shell: |
+    curl -fsSL https://apt.releases.hashicorp.com/gpg \
+    | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  args:
+    creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+- name: Add HashiCorp repo
+  shell: |
+    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+    https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+    > /etc/apt/sources.list.d/hashicorp.list
+  args:
+    creates: /etc/apt/sources.list.d/hashicorp.list
+
+- name: Update apt after adding Hashicorp repo
+  apt:
+    update_cache: yes
+
+- name: Install Terraform
+  apt:
+    name: terraform
+    state: present
+
+################################################
+# KUBECTL (Official Binary)
+################################################
+
+- name: Download kubectl
+  get_url:
+    url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl"
+    dest: /usr/local/bin/kubectl
+    mode: "0755"
+

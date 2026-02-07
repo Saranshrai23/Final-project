@@ -1,0 +1,7 @@
+---
+docker_users:
+  - jenkins
+
+terraform_version: "1.7.5"
+kubectl_version: "v1.29.0"
+
